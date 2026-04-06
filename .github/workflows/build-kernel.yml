@@ -94,6 +94,9 @@ jobs:
         run: |
           make mrproper
           rm -rf ${{ env.OUT_DIR }}
+          rm -f .config
+          rm -rf include/config
+          rm -rf arch/arm64/include/generated
           mkdir -p ${{ env.OUT_DIR }}
           make ${{ env.MAKE_FLAGS }} ${{ env.DEFCONFIG }}
           FRAGS=""
@@ -110,7 +113,8 @@ jobs:
             ./scripts/kconfig/merge_config.sh -m ${{ env.OUT_DIR }}/.config $FRAGS
           fi
           make ${{ env.MAKE_FLAGS }} olddefconfig
-      - name: Upload build log
+      
+      -name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
