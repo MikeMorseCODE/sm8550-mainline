@@ -64,7 +64,7 @@ jobs:
             -o clang.tar.gz && \
             tar -xzf clang.tar.gz -C clang && \
             rm clang.tar.gz || {
-              echo "AOSP fetch failed — falling back to apt clang"
+              echo "AOSP fetch failed - falling back to apt clang"
               sudo apt-get install -y clang lld llvm
               ln -sf $(which clang) clang/bin/clang
               ln -sf $(which ld.lld) clang/bin/ld.lld
@@ -106,15 +106,25 @@ jobs:
               FRAGS="$FRAGS $cfg"
               echo "  + $frag"
             else
-              echo "::warning::Config fragment not found: $cfg — skipping"
+              echo "::warning::Config fragment not found: $cfg - skipping"
             fi
           done
           if [ -n "$FRAGS" ]; then
             ./scripts/kconfig/merge_config.sh -m ${{ env.OUT_DIR }}/.config $FRAGS
           fi
           make ${{ env.MAKE_FLAGS }} olddefconfig
-      
-      -name: Upload build log
+
+      - name: Build kernel
+        run: |
+          make ${{ env.MAKE_FLAGS }} -j$(nproc --all) \
+            Image Image.gz dtbs modules 2>&1 | tee build.log
+          test -f ${{ env.OUT_DIR }}/arch/arm64/boot/Image || {
+            echo "::error::Kernel Image missing - build failed"
+            tail -80 build.log
+            exit 1
+          }
+
+      - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
