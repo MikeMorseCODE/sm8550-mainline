@@ -128,8 +128,9 @@ jobs:
           done
 
           if [ -n "$FRAGS" ]; then
+            KCONFIG_CONFIG="${{ env.OUT_DIR }}/.config" \
             ./scripts/kconfig/merge_config.sh \
-              -m ${{ env.OUT_DIR }}/.config $FRAGS
+              -m -Q -O "${{ env.OUT_DIR }}" ${{ env.OUT_DIR }}/.config $FRAGS
           fi
 
           # Step 3: any extra fragments from workflow input
@@ -138,8 +139,9 @@ jobs:
             for frag in ${{ github.event.inputs.extra_configs }}; do
               EXTRA="$EXTRA arch/arm64/configs/$frag"
             done
+            KCONFIG_CONFIG="${{ env.OUT_DIR }}/.config" \
             ./scripts/kconfig/merge_config.sh \
-              -m ${{ env.OUT_DIR }}/.config $EXTRA
+              -m -Q -O "${{ env.OUT_DIR }}" ${{ env.OUT_DIR }}/.config $EXTRA
           fi
 
           # Resolve any conflicts / new symbols
