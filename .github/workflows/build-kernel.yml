@@ -1,0 +1,168 @@
+name: Build OnePlus 11 Mainline Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - anykernel3
+          - raw
+          - boot_img
+
+env:
+  KERNEL_BRANCH: "salami-6.14"
+  CLANG_VERSION: "r536225"
+  DEFCONFIG: "defconfig"
+  CONFIG_FRAGMENTS: "sm8550.config op11.config hardening.config"
+  DTS_FRAGMENTS_DIR: "arch/arm64/boot/dts/qcom"
+  ARCH: arm64
+  SUBARCH: arm64
+  OUT_DIR: out
+  AK3_REPO: "https://github.com/osm0sis/AnyKernel3"
+  AK3_BRANCH: "master"
+
+jobs:
+  build:
+    name: Kernel build — OnePlus 11 (SM8550)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout kernel
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.KERNEL_BRANCH }}
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl \
+            flex git kmod libelf-dev libssl-dev lz4 \
+            python3 rsync unzip xz-utils zstd \
+            device-tree-compiler
+
+      - name: Cache clang toolchain
+        id: cache-clang
+        uses: actions/cache@v4
+        with:
+          path: clang
+          key: clang-${{ env.CLANG_VERSION }}
+
+      - name: Download clang
+        if: steps.cache-clang.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p clang
+          curl -L \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz" \
+            -o clang.tar.gz && \
+            tar -xzf clang.tar.gz -C clang && \
+            rm clang.tar.gz || {
+              echo "AOSP fetch failed — falling back to apt clang"
+              sudo apt-get install -y clang lld llvm
+            }
+
+      - name: Add clang to PATH
+        run: echo "$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_PATH
+
+      - name: Set build environment
+        run: |
+          echo "KBUILD_BUILD_USER=github-ci" >> $GITHUB_ENV
+          echo "KBUILD_BUILD_HOST=actions"   >> $GITHUB_ENV
+          FLAGS="ARCH=${{ env.ARCH }} SUBARCH=${{ env.SUBARCH }}"
+          FLAGS="$FLAGS LLVM=1 LLVM_IAS=1"
+          FLAGS="$FLAGS CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm"
+          FLAGS="$FLAGS OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip"
+          FLAGS="$FLAGS CROSS_COMPILE=aarch64-linux-gnu-"
+          FLAGS="$FLAGS O=${{ env.OUT_DIR }}"
+          echo "MAKE_FLAGS=$FLAGS" >> $GITHUB_ENV
+
+      - name: Configure kernel
+        run: |
+          mkdir -p ${{ env.OUT_DIR }}
+          make ${{ env.MAKE_FLAGS }} ${{ env.DEFCONFIG }}
+          FRAGS=""
+          for frag in ${{ env.CONFIG_FRAGMENTS }}; do
+            cfg="arch/arm64/configs/$frag"
+            if [ -f "$cfg" ]; then
+              FRAGS="$FRAGS $cfg"
+              echo "  + $frag"
+            else
+              echo "::warning::Config fragment not found: $cfg — skipping"
+            fi
+          done
+          if [ -n "$FRAGS" ]; then
+            ./scripts/kconfig/merge_config.sh -m ${{ env.OUT_DIR }}/.config $FRAGS
+          fi
+          make ${{ env.MAKE_FLAGS }} olddefconfig
+
+      - name: Build kernel
+        run: |
+          make ${{ env.MAKE_FLAGS }} -j$(nproc --all) \
+            Image Image.gz dtbs modules 2>&1 | tee build.log
+          test -f ${{ env.OUT_DIR }}/arch/arm64/boot/Image || {
+            echo "::error::Kernel Image missing — build failed"
+            tail -80 build.log
+            exit 1
+          }
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_number }}
+          path: build.log
+          retention-days: 7
+
+      - name: Collect outputs
+        run: |
+          mkdir -p dist/raw/dtbs
+          cp ${{ env.OUT_DIR }}/arch/arm64/boot/Image dist/raw/
+          cp ${{ env.OUT_DIR }}/arch/arm64/boot/Image.gz dist/raw/ 2>/dev/null || true
+          find ${{ env.OUT_DIR }}/arch/arm64/boot/dts -name "*.dtb" \
+            -exec cp {} dist/raw/dtbs/ \;
+          make ${{ env.MAKE_FLAGS }} \
+            INSTALL_MOD_PATH=dist/raw/modules \
+            INSTALL_MOD_STRIP=1 modules_install
+
+      - name: Build AnyKernel3 zip
+        if: |
+          github.event.inputs.build_type == 'all' ||
+          github.event.inputs.build_type == 'anykernel3'
+        run: |
+          git clone --depth=1 ${{ env.AK3_REPO }} -b ${{ env.AK3_BRANCH }} ak3
+          cp dist/raw/Image ak3/
+          cp dist/raw/Image.gz ak3/ 2>/dev/null || true
+          mkdir -p ak3/dtbs
+          cp dist/raw/dtbs/*.dtb ak3/dtbs/ 2>/dev/null || true
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/' ak3/anykernel.sh || true
+          ZIPNAME="op11-mainline-$(date +%Y%m%d-%H%M)-r${{ github.run_number }}.zip"
+          cd ak3 && zip -r9 "../dist/$ZIPNAME" . -x ".git/*" -x "*.placeholder"
+          echo "AK3_ZIP=$ZIPNAME" >> $GITHUB_ENV
+
+      - name: Upload raw artifacts
+        if: |
+          github.event.inputs.build_type == 'all' ||
+          github.event.inputs.build_type == 'raw'
+        uses: actions/upload-artifact@v4
+        with:
+          name: op11-kernel-raw-r${{ github.run_number }}
+          path: dist/raw/
+          retention-days: 14
+
+      - name: Upload AnyKernel3 zip
+        if: |
+          (github.event.inputs.build_type == 'all' ||
+          github.event.inputs.build_type == 'anykernel3') &&
+          env.AK3_ZIP != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: op11-anykernel3-r${{ github.run_number }}
+          path: dist/${{ env.AK3_ZIP }}
+          retention-days: 14
