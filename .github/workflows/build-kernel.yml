@@ -28,7 +28,7 @@ env:
 
 jobs:
   build:
-    name: Kernel build — OnePlus 11 (SM8550)
+    name: Kernel build - OnePlus 11 (SM8550)
     runs-on: ubuntu-latest
 
     steps:
