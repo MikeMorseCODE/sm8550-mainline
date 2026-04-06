@@ -90,7 +90,7 @@ jobs:
           FLAGS="$FLAGS O=${{ env.OUT_DIR }}"
           echo "MAKE_FLAGS=$FLAGS" >> $GITHUB_ENV
 
-     - name: Configure kernel
+      - name: Configure kernel
         run: |
           make mrproper
           mkdir -p ${{ env.OUT_DIR }}
