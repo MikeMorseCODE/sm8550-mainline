@@ -58,7 +58,7 @@ jobs:
       - name: Download clang
         if: steps.cache-clang.outputs.cache-hit != 'true'
         run: |
-          mkdir -p clang
+          mkdir -p clang/bin
           curl -L \
             "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz" \
             -o clang.tar.gz && \
@@ -66,6 +66,13 @@ jobs:
             rm clang.tar.gz || {
               echo "AOSP fetch failed — falling back to apt clang"
               sudo apt-get install -y clang lld llvm
+              ln -sf $(which clang) clang/bin/clang
+              ln -sf $(which ld.lld) clang/bin/ld.lld
+              ln -sf $(which llvm-ar) clang/bin/llvm-ar
+              ln -sf $(which llvm-nm) clang/bin/llvm-nm
+              ln -sf $(which llvm-objcopy) clang/bin/llvm-objcopy
+              ln -sf $(which llvm-objdump) clang/bin/llvm-objdump
+              ln -sf $(which llvm-strip) clang/bin/llvm-strip
             }
 
       - name: Add clang to PATH
@@ -83,10 +90,10 @@ jobs:
           FLAGS="$FLAGS O=${{ env.OUT_DIR }}"
           echo "MAKE_FLAGS=$FLAGS" >> $GITHUB_ENV
 
-      - name: Configure kernel
+     - name: Configure kernel
         run: |
+          make mrproper
           mkdir -p ${{ env.OUT_DIR }}
-          make ${{ env.MAKE_FLAGS }} mrproper
           make ${{ env.MAKE_FLAGS }} ${{ env.DEFCONFIG }}
           FRAGS=""
           for frag in ${{ env.CONFIG_FRAGMENTS }}; do
@@ -102,7 +109,6 @@ jobs:
             ./scripts/kconfig/merge_config.sh -m ${{ env.OUT_DIR }}/.config $FRAGS
           fi
           make ${{ env.MAKE_FLAGS }} olddefconfig
-
       - name: Build kernel
         run: |
           make ${{ env.MAKE_FLAGS }} -j$(nproc --all) \
